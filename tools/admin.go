@@ -39,7 +39,12 @@ var ListTeams = mcpgrafana.MustTool(
 	mcp.WithReadOnlyHintAnnotation(true),
 )
 
-type ListUsersByOrgParams struct{}
+type ListUsersByOrgParams struct {
+	// This tool requires no parameters, but we include a placeholder field
+	// to ensure proper JSON Schema generation for OpenAI API compatibility.
+	// The field must not use omitempty to ensure it appears in the generated schema.
+	Placeholder string `json:"placeholder" jsonschema:"description=This parameter is optional and not used. You can pass an empty string or omit it entirely."`
+}
 
 func listUsersByOrg(ctx context.Context, args ListUsersByOrgParams) ([]*models.OrgUserDTO, error) {
 	c := mcpgrafana.GrafanaClientFromContext(ctx)
