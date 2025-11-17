@@ -1,9 +1,9 @@
 {
-    "tss-node-1-1": {
+    "mcp-grafana": {
       "template": "program",
       "settings": {
-        "command": "tss-node start -c configs/node-config.yaml"
+        "command": "mcp-grafana"
       },
-      "tag": "node1-1"
+      "tag": "mcp-grafana"
     }
 }
