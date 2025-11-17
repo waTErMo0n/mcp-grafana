@@ -14,7 +14,7 @@ build-image: ## Build the Docker image.
 
 .PHONY: build
 build: ## Build the binary.
-	go build -o dist/mcp-grafana ./cmd/mcp-grafana
+	go build -o mcp-grafana ./cmd/mcp-grafana
 
 .PHONY: lint lint-jsonschema lint-jsonschema-fix
 lint: lint-jsonschema ## Lint the Go code.
