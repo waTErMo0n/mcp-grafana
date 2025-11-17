@@ -1,0 +1,9 @@
+{
+    "tss-node-1-1": {
+      "template": "program",
+      "settings": {
+        "command": "tss-node start -c configs/node-config.yaml"
+      },
+      "tag": "node1-1"
+    }
+}

@@ -13,6 +13,3 @@ wheels/
 # Virtual environments
 .venv
 .envrc
-
-# Fabric
-.fabistrano/
