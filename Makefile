@@ -16,6 +16,10 @@ build-image: ## Build the Docker image.
 build: ## Build the binary.
 	go build -o mcp-grafana ./cmd/mcp-grafana
 
+.PHONY: build-linux
+build-linux: ## Build the binary for Linux (AMD64).
+	GOOS=linux GOARCH=amd64 go build -o mcp-grafana ./cmd/mcp-grafana
+
 .PHONY: lint lint-jsonschema lint-jsonschema-fix
 lint: lint-jsonschema ## Lint the Go code.
 	golangci-lint run

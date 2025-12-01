@@ -206,11 +206,27 @@ func GetDashboardPanelQueriesTool(ctx context.Context, args DashboardPanelQuerie
 			if !ok {
 				continue
 			}
-			expr, _ := target["expr"].(string)
-			if expr != "" {
+
+			// Try different query field names used by various datasources
+			var query string
+			if expr, ok := target["expr"].(string); ok && expr != "" {
+				// Prometheus, Loki
+				query = expr
+			} else if q, ok := target["query"].(string); ok && q != "" {
+				// InfluxDB, Elasticsearch, etc.
+				query = q
+			} else if rawSql, ok := target["rawSql"].(string); ok && rawSql != "" {
+				// SQL datasources (MySQL, PostgreSQL, etc.)
+				query = rawSql
+			} else if rawQuery, ok := target["rawQuery"].(string); ok && rawQuery != "" {
+				// Some other datasources
+				query = rawQuery
+			}
+
+			if query != "" {
 				result = append(result, panelQuery{
 					Title:      title,
-					Query:      expr,
+					Query:      query,
 					Datasource: datasourceInfo,
 				})
 			}
@@ -271,7 +287,7 @@ func getDashboardProperty(ctx context.Context, args GetDashboardPropertyParams) 
 
 var GetDashboardProperty = mcpgrafana.MustTool(
 	"get_dashboard_property",
-	"Get specific parts of a dashboard using JSONPath expressions to minimize context window usage. Common paths: '$.title' (title)\\, '$.panels[*].title' (all panel titles)\\, '$.panels[0]' (first panel)\\, '$.templating.list' (variables)\\, '$.tags' (tags)\\, '$.panels[*].targets[*].expr' (all queries). Use this instead of get_dashboard_by_uid when you only need specific dashboard properties.",
+	"Get specific parts of a dashboard using JSONPath expressions to minimize context window usage. Common paths: '$.title' (title)\\, '$.panels[*].title' (all panel titles)\\, '$.panels[0]' (first panel)\\, '$.templating.list' (variables)\\, '$.tags' (tags)\\, '$.panels[*].targets' (all targets/queries). Note: Query field names vary by datasource - Prometheus/Loki use 'expr'\\, InfluxDB uses 'query'\\, SQL datasources use 'rawSql'. To get all query strings regardless of datasource type\\, use get_dashboard_panel_queries instead. Use this tool when you need the raw target objects or specific dashboard properties.",
 	getDashboardProperty,
 	mcp.WithTitleAnnotation("Get dashboard property"),
 	mcp.WithIdempotentHintAnnotation(true),

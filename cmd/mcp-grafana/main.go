@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
@@ -328,6 +329,14 @@ func run(transport, addr, basePath, endpointPath string, logLevel slog.Level, dt
 }
 
 func main() {
+	// Load .env file if it exists (ignore error if file doesn't exist)
+	if err := godotenv.Load(); err != nil {
+		// Only log if it's not a "file not found" error
+		if !os.IsNotExist(err) {
+			slog.Debug("Error loading .env file", "error", err)
+		}
+	}
+
 	var transport string
 	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio, sse or streamable-http)")
 	flag.StringVar(
