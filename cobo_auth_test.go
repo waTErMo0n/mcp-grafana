@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"log/slog"
@@ -58,7 +59,7 @@ func TestCoboAuthMiddlewareRejectsMissingAndInvalidTokens(t *testing.T) {
 		{name: "expired", authorization: "Bearer " + mustSignCoboJWT(t, "test-secret", "alice@example.com", "Alice", "s1", time.Now().Add(-time.Minute))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+			req := httptest.NewRequest(http.MethodGet, "https://mcp.example.com/mcp", nil)
 			if tc.authorization != "" {
 				req.Header.Set("Authorization", tc.authorization)
 			}
@@ -67,6 +68,9 @@ func TestCoboAuthMiddlewareRejectsMissingAndInvalidTokens(t *testing.T) {
 			handler.ServeHTTP(rr, req)
 
 			assert.Equal(t, http.StatusUnauthorized, rr.Code)
+			assert.Contains(t, rr.Header().Get("WWW-Authenticate"), `Bearer realm="Grafana MCP"`)
+			assert.Contains(t, rr.Header().Get("WWW-Authenticate"), `error="invalid_token"`)
+			assert.Contains(t, rr.Header().Get("WWW-Authenticate"), `resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"`)
 		})
 	}
 }
@@ -101,6 +105,80 @@ func TestCoboAuthMiddlewareBypassesExemptPathsAndOptions(t *testing.T) {
 		})
 	}
 	assert.Equal(t, 3, called)
+}
+
+func TestCoboAuthMiddlewareBypassesOAuthMetadataPaths(t *testing.T) {
+	called := 0
+	handler := CoboAuthMiddleware(CoboAuthConfig{
+		Enabled: true,
+		ExemptPaths: []string{
+			"/.well-known/oauth-protected-resource",
+			"/.well-known/oauth-authorization-server",
+			"/.well-known/openid-configuration",
+		},
+	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, path := range []string{
+		"/.well-known/oauth-protected-resource",
+		"/.well-known/oauth-authorization-server",
+		"/.well-known/openid-configuration",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusNoContent, rr.Code)
+	}
+	assert.Equal(t, 3, called)
+}
+
+func TestOAuthProtectedResourceMetadataHandlerReturnsAuthorizationServers(t *testing.T) {
+	handler := OAuthProtectedResourceMetadataHandler(OAuthMetadataConfig{
+		ServerBaseURL: "https://oauth.example.com",
+		Scopes:        []string{"profile", "email", "openid"},
+	})
+	req := httptest.NewRequest(http.MethodGet, "http://internal/.well-known/oauth-protected-resource", nil)
+	req.Host = "mcp.example.com"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	assert.Equal(t, "https://mcp.example.com", body["resource"])
+	assert.ElementsMatch(t, []any{"https://oauth.example.com"}, body["authorization_servers"].([]any))
+	assert.ElementsMatch(t, []any{"profile", "email", "openid"}, body["scopes_supported"].([]any))
+}
+
+func TestOAuthMetadataHandlerReturnsCoboAuthorizationServerMetadata(t *testing.T) {
+	handler := OAuthMetadataHandler(OAuthMetadataConfig{
+		ServerBaseURL: "https://oauth.example.com",
+		Provider:      "cobo_agent_oauth",
+		Scopes:        []string{"profile", "email", "openid"},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	assert.Equal(t, "https://oauth.example.com", body["issuer"])
+	assert.Equal(t, "https://oauth.example.com/oauth/authorize/cobo_agent_oauth", body["authorization_endpoint"])
+	assert.Equal(t, "https://oauth.example.com/oauth/token", body["token_endpoint"])
+	assert.Equal(t, "https://oauth.example.com/oauth/userinfo", body["userinfo_endpoint"])
+	assert.Equal(t, "https://oauth.example.com/oauth/register", body["registration_endpoint"])
+	assert.ElementsMatch(t, []any{"profile", "email", "openid"}, body["scopes_supported"].([]any))
+	assert.ElementsMatch(t, []any{"S256", "plain"}, body["code_challenge_methods_supported"].([]any))
 }
 
 func TestGrafanaJWTIssuerPreservesPythonPayloadContract(t *testing.T) {

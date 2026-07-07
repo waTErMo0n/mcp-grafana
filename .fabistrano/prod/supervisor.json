@@ -1,5 +1,5 @@
 {
-    "mcp-grafana": {
+    "mcp-grafana-jwt-test": {
       "template": "program",
       "settings": {
         "command": "mcp-grafana"

@@ -83,7 +83,8 @@ func coboAuthConfigFromEnv() mcpgrafana.CoboAuthConfig {
 	return mcpgrafana.CoboAuthConfig{
 		Enabled:     strings.EqualFold(strings.TrimSpace(os.Getenv("COBO_AUTH_ENABLED")), "true") || strings.EqualFold(strings.TrimSpace(os.Getenv("GRAFANA_AUTH_MODE")), "jwt"),
 		JWTSecret:   os.Getenv("COBO_AUTH_JWT_SECRET"),
-		ExemptPaths: []string{"/healthz", "/metrics"},
+		ExemptPaths: []string{"/healthz", "/metrics", "/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"},
+		Realm:       "Grafana MCP",
 	}
 }
 
@@ -554,6 +555,10 @@ func run(transport, addr, basePath, endpointPath string, logLevel slog.Level, dt
 			basePath,
 		))
 		mux.HandleFunc("/healthz", handleHealthz)
+		oauthMetadataConfig := mcpgrafana.OAuthMetadataConfigFromEnv()
+		mux.Handle("/.well-known/oauth-protected-resource", mcpgrafana.OAuthProtectedResourceMetadataHandler(oauthMetadataConfig))
+		mux.Handle("/.well-known/oauth-authorization-server", mcpgrafana.OAuthMetadataHandler(oauthMetadataConfig))
+		mux.Handle("/.well-known/openid-configuration", mcpgrafana.OAuthMetadataHandler(oauthMetadataConfig))
 		if obs.MetricsEnabled {
 			if obs.MetricsAddress == "" {
 				mux.Handle("/metrics", o.MetricsHandler())
@@ -583,6 +588,10 @@ func run(transport, addr, basePath, endpointPath string, logLevel slog.Level, dt
 			endpointPath,
 		))
 		mux.HandleFunc("/healthz", handleHealthz)
+		oauthMetadataConfig := mcpgrafana.OAuthMetadataConfigFromEnv()
+		mux.Handle("/.well-known/oauth-protected-resource", mcpgrafana.OAuthProtectedResourceMetadataHandler(oauthMetadataConfig))
+		mux.Handle("/.well-known/oauth-authorization-server", mcpgrafana.OAuthMetadataHandler(oauthMetadataConfig))
+		mux.Handle("/.well-known/openid-configuration", mcpgrafana.OAuthMetadataHandler(oauthMetadataConfig))
 		if obs.MetricsEnabled {
 			if obs.MetricsAddress == "" {
 				mux.Handle("/metrics", o.MetricsHandler())

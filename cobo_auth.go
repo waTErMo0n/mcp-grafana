@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -16,6 +18,10 @@ import (
 
 const (
 	coboAuthJWTSecretEnvVar = "COBO_AUTH_JWT_SECRET"
+	coboOAuthBaseURLEnvVar  = "COBO_OAUTH_SERVER_BASE_URL"
+	oauthBaseURLEnvVar      = "OAUTH_SERVER_BASE_URL"
+	coboOAuthProviderEnvVar = "COBO_OAUTH_PROVIDER"
+	coboOAuthScopesEnvVar   = "COBO_OAUTH_SCOPES"
 
 	grafanaAuthModeEnvVar         = "GRAFANA_AUTH_MODE"
 	grafanaJWTRSAPrivateKeyEnvVar = "GRAFANA_JWT_RSA_PRIVATE_KEY"
@@ -29,6 +35,7 @@ const (
 	defaultGrafanaJWTIssuer    = "grafana_mcp_server"
 	defaultGrafanaJWTAudience  = "grafana"
 	defaultGrafanaJWTTTLSecond = 60
+	defaultCoboOAuthProvider   = "cobo_agent_oauth"
 )
 
 type coboIdentityKey struct{}
@@ -65,6 +72,7 @@ type CoboAuthConfig struct {
 	Enabled     bool
 	JWTSecret   string
 	ExemptPaths []string
+	Realm       string
 }
 
 // CoboAuthMiddleware validates inbound Cobo HS256 bearer tokens for HTTP transports.
@@ -89,11 +97,139 @@ func CoboAuthMiddleware(cfg CoboAuthConfig, next http.Handler) http.Handler {
 		}
 		identity, err := ExtractCoboIdentityFromRequest(r, cfg.JWTSecret)
 		if err != nil {
+			realm := cfg.Realm
+			if realm == "" {
+				realm = "Grafana MCP"
+			}
+			metadataURL := requestExternalBaseURL(r) + "/.well-known/oauth-protected-resource"
+			w.Header().Set("WWW-Authenticate", fmt.Sprintf(
+				`Bearer realm="%s", error="invalid_token", error_description="Authentication required", resource_metadata="%s"`,
+				realm,
+				metadataURL,
+			))
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(WithCoboIdentity(r.Context(), identity)))
 	})
+}
+
+// OAuthMetadataConfig describes the OAuth authorization server used by MCP clients.
+type OAuthMetadataConfig struct {
+	ServerBaseURL string
+	Provider      string
+	Scopes        []string
+}
+
+func (cfg OAuthMetadataConfig) withDefaults() OAuthMetadataConfig {
+	cfg.ServerBaseURL = strings.TrimRight(strings.TrimSpace(cfg.ServerBaseURL), "/")
+	if cfg.Provider == "" {
+		cfg.Provider = defaultCoboOAuthProvider
+	}
+	if len(cfg.Scopes) == 0 {
+		cfg.Scopes = []string{"profile", "email", "openid"}
+	}
+	return cfg
+}
+
+// OAuthMetadataConfigFromEnv loads Cobo OAuth metadata settings, matching the Python runner env names.
+func OAuthMetadataConfigFromEnv() OAuthMetadataConfig {
+	baseURL := os.Getenv(coboOAuthBaseURLEnvVar)
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = os.Getenv(oauthBaseURLEnvVar)
+	}
+	return OAuthMetadataConfig{
+		ServerBaseURL: baseURL,
+		Provider:      os.Getenv(coboOAuthProviderEnvVar),
+		Scopes:        strings.Fields(os.Getenv(coboOAuthScopesEnvVar)),
+	}.withDefaults()
+}
+
+// OAuthProtectedResourceMetadataHandler returns MCP protected resource metadata for OAuth discovery.
+func OAuthProtectedResourceMetadataHandler(cfg OAuthMetadataConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		metadata, err := OAuthProtectedResourceMetadata(cfg, requestExternalBaseURL(r))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(metadata); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}
+}
+
+// OAuthMetadataHandler returns OAuth authorization-server metadata for MCP clients.
+func OAuthMetadataHandler(cfg OAuthMetadataConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		metadata, err := OAuthMetadata(cfg)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(metadata); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}
+}
+
+// OAuthProtectedResourceMetadata describes this MCP server as an OAuth protected resource.
+func OAuthProtectedResourceMetadata(cfg OAuthMetadataConfig, resourceURL string) (map[string]any, error) {
+	cfg = cfg.withDefaults()
+	if cfg.ServerBaseURL == "" {
+		return nil, errors.New("OAUTH_SERVER_BASE_URL is required")
+	}
+	return map[string]any{
+		"resource":              strings.TrimRight(strings.TrimSpace(resourceURL), "/"),
+		"authorization_servers": []string{cfg.ServerBaseURL},
+		"scopes_supported":      cfg.Scopes,
+		"bearer_methods_supported": []string{
+			"header",
+		},
+	}, nil
+}
+
+// OAuthMetadata returns the same provider-facing metadata shape used by the Python MCP runner.
+func OAuthMetadata(cfg OAuthMetadataConfig) (map[string]any, error) {
+	cfg = cfg.withDefaults()
+	if cfg.ServerBaseURL == "" {
+		return nil, errors.New("OAUTH_SERVER_BASE_URL is required")
+	}
+	return map[string]any{
+		"issuer":                                cfg.ServerBaseURL,
+		"authorization_endpoint":                fmt.Sprintf("%s/oauth/authorize/%s", cfg.ServerBaseURL, cfg.Provider),
+		"token_endpoint":                        fmt.Sprintf("%s/oauth/token", cfg.ServerBaseURL),
+		"userinfo_endpoint":                     fmt.Sprintf("%s/oauth/userinfo", cfg.ServerBaseURL),
+		"registration_endpoint":                 fmt.Sprintf("%s/oauth/register", cfg.ServerBaseURL),
+		"response_types_supported":              []string{"code"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_post"},
+		"scopes_supported":                      cfg.Scopes,
+		"code_challenge_methods_supported":      []string{"S256", "plain"},
+		"ui_locales_supported":                  []string{"en", "zh"},
+		"response_modes_supported":              []string{"query"},
+	}, nil
+}
+
+func requestExternalBaseURL(r *http.Request) string {
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		if r.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	return strings.TrimRight(proto+"://"+host, "/")
 }
 
 // ExtractCoboIdentityFromRequest validates the Authorization bearer token and returns its caller identity.
