@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -36,6 +37,35 @@ func loadDotEnv(path string) error {
 	}
 	defer file.Close()
 	return loadEnvReader(file)
+}
+
+func loadDotEnvFiles(paths ...string) error {
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		absPath, err := filepath.Abs(path)
+		if err == nil {
+			path = absPath
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		if err := loadDotEnv(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func defaultDotEnvPaths() []string {
+	paths := []string{".env"}
+	if executable, err := os.Executable(); err == nil {
+		paths = append(paths, filepath.Join(filepath.Dir(executable), ".env"))
+	}
+	return paths
 }
 
 func loadEnvReader(r io.Reader) error {
@@ -609,7 +639,7 @@ func run(transport, addr, basePath, endpointPath string, logLevel slog.Level, dt
 }
 
 func main() {
-	if err := loadDotEnv(".env"); err != nil {
+	if err := loadDotEnvFiles(defaultDotEnvPaths()...); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load .env: %v\n", err)
 		os.Exit(2)
 	}

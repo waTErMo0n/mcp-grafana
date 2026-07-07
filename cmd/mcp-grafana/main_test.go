@@ -49,6 +49,20 @@ func TestLoadDotEnvIgnoresMissingFile(t *testing.T) {
 	require.NoError(t, loadDotEnv(filepath.Join(t.TempDir(), ".env")))
 }
 
+func TestLoadDotEnvFilesLoadsFallbackPath(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte("DOTENV_FALLBACK=loaded\n"), 0o600))
+	require.NoError(t, os.Unsetenv("DOTENV_FALLBACK"))
+	t.Cleanup(func() {
+		_ = os.Unsetenv("DOTENV_FALLBACK")
+	})
+
+	require.NoError(t, loadDotEnvFiles(filepath.Join(t.TempDir(), ".env"), envPath))
+
+	assert.Equal(t, "loaded", os.Getenv("DOTENV_FALLBACK"))
+}
+
 func (s *testClientSession) SessionID() string                                   { return s.id }
 func (s *testClientSession) NotificationChannel() chan<- mcp.JSONRPCNotification { return nil }
 func (s *testClientSession) Initialize()                                         {}
