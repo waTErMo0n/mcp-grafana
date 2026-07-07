@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -19,6 +21,32 @@ import (
 // testClientSession implements server.ClientSession for unit tests.
 type testClientSession struct {
 	id string
+}
+
+func TestLoadDotEnvDoesNotOverrideExistingEnv(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte("DOTENV_A=from-file\nDOTENV_B=\"quoted value\"\nDOTENV_C='single quoted'\nexport DOTENV_D=exported\n# ignored\n"), 0o600))
+	t.Setenv("DOTENV_A", "from-env")
+	require.NoError(t, os.Unsetenv("DOTENV_B"))
+	require.NoError(t, os.Unsetenv("DOTENV_C"))
+	require.NoError(t, os.Unsetenv("DOTENV_D"))
+	t.Cleanup(func() {
+		_ = os.Unsetenv("DOTENV_B")
+		_ = os.Unsetenv("DOTENV_C")
+		_ = os.Unsetenv("DOTENV_D")
+	})
+
+	require.NoError(t, loadDotEnv(envPath))
+
+	assert.Equal(t, "from-env", os.Getenv("DOTENV_A"))
+	assert.Equal(t, "quoted value", os.Getenv("DOTENV_B"))
+	assert.Equal(t, "single quoted", os.Getenv("DOTENV_C"))
+	assert.Equal(t, "exported", os.Getenv("DOTENV_D"))
+}
+
+func TestLoadDotEnvIgnoresMissingFile(t *testing.T) {
+	require.NoError(t, loadDotEnv(filepath.Join(t.TempDir(), ".env")))
 }
 
 func (s *testClientSession) SessionID() string                                   { return s.id }

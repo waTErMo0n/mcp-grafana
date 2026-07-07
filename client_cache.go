@@ -28,6 +28,7 @@ type clientCacheKey struct {
 	password         string
 	orgID            int64
 	forwardedHeaders string // sorted, serialized forwarded headers for cache differentiation
+	coboEmail        string
 }
 
 // cacheKeyFromRequest builds a clientCacheKey from request-derived credentials and forwarded headers.
@@ -42,6 +43,9 @@ func cacheKeyFromRequest(grafanaURL, apiKey string, basicAuth *url.Userinfo, org
 		key.password, _ = basicAuth.Password()
 	}
 	if req != nil {
+		if identity, ok := CoboIdentityFromContext(req.Context()); ok {
+			key.coboEmail = identity.Email
+		}
 		headers := forwardedHeadersFromRequest(req)
 		if len(headers) > 0 {
 			names := make([]string, 0, len(headers))
@@ -66,7 +70,7 @@ func cacheKeyFromRequest(grafanaURL, apiKey string, basicAuth *url.Userinfo, org
 func (k clientCacheKey) String() string {
 	hasKey := k.apiKey != ""
 	hasBasic := k.username != ""
-	return fmt.Sprintf("url=%s apiKey=%t basicAuth=%t orgID=%d forwardedHeaders=%s", k.url, hasKey, hasBasic, k.orgID, k.forwardedHeaders)
+	return fmt.Sprintf("url=%s apiKey=%t basicAuth=%t orgID=%d coboEmail=%t forwardedHeaders=%s", k.url, hasKey, hasBasic, k.orgID, k.coboEmail != "", k.forwardedHeaders)
 }
 
 // clientCacheMetrics holds OTel instruments for cache observability.

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -24,6 +26,46 @@ import (
 	"go.opentelemetry.io/otel/semconv/v1.40.0/mcpconv"
 )
 
+func loadDotEnv(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return loadEnvReader(file)
+}
+
+func loadEnvReader(r io.Reader) error {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		key = strings.TrimPrefix(key, "export ")
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"'`)
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
 func maybeAddTools(s *server.MCPServer, tf func(*server.MCPServer), enabledTools []string, disable bool, category string) {
 	if !slices.Contains(enabledTools, category) {
 		slog.Debug("Not enabling tools", "category", category)
@@ -35,6 +77,14 @@ func maybeAddTools(s *server.MCPServer, tf func(*server.MCPServer), enabledTools
 	}
 	slog.Debug("Enabling tools", "category", category)
 	tf(s)
+}
+
+func coboAuthConfigFromEnv() mcpgrafana.CoboAuthConfig {
+	return mcpgrafana.CoboAuthConfig{
+		Enabled:     strings.EqualFold(strings.TrimSpace(os.Getenv("COBO_AUTH_ENABLED")), "true") || strings.EqualFold(strings.TrimSpace(os.Getenv("GRAFANA_AUTH_MODE")), "jwt"),
+		JWTSecret:   os.Getenv("COBO_AUTH_JWT_SECRET"),
+		ExemptPaths: []string{"/healthz", "/metrics"},
+	}
 }
 
 // isCategoryEnabled reports whether a tool category is active given the
@@ -511,7 +561,7 @@ func run(transport, addr, basePath, endpointPath string, logLevel slog.Level, dt
 				go runMetricsServer(obs.MetricsAddress, o)
 			}
 		}
-		httpSrv.Handler = mux
+		httpSrv.Handler = mcpgrafana.CoboAuthMiddleware(coboAuthConfigFromEnv(), mux)
 		slog.Info("Starting Grafana MCP server using SSE transport",
 			"version", mcpgrafana.Version(), "address", addr, "basePath", basePath, "metrics", obs.MetricsEnabled)
 		return runHTTPServer(ctx, srv, addr, "SSE")
@@ -540,7 +590,7 @@ func run(transport, addr, basePath, endpointPath string, logLevel slog.Level, dt
 				go runMetricsServer(obs.MetricsAddress, o)
 			}
 		}
-		httpSrv.Handler = mux
+		httpSrv.Handler = mcpgrafana.CoboAuthMiddleware(coboAuthConfigFromEnv(), mux)
 		slog.Info("Starting Grafana MCP server using StreamableHTTP transport",
 			"version", mcpgrafana.Version(), "address", addr, "endpointPath", endpointPath, "metrics", obs.MetricsEnabled)
 		return runHTTPServer(ctx, srv, addr, "StreamableHTTP")
@@ -550,6 +600,11 @@ func run(transport, addr, basePath, endpointPath string, logLevel slog.Level, dt
 }
 
 func main() {
+	if err := loadDotEnv(".env"); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load .env: %v\n", err)
+		os.Exit(2)
+	}
+
 	var transport string
 	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio, sse or streamable-http)")
 	flag.StringVar(

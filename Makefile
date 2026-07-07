@@ -16,6 +16,10 @@ build-image: ## Build the Docker image.
 build: ## Build the binary.
 	go build -o dist/mcp-grafana ./cmd/mcp-grafana
 
+.PHONY: build-linux
+build-linux: ## Build the Linux binary expected by fabistrano deployment.
+	GOOS=linux GOARCH=amd64 go build -o mcp-grafana ./cmd/mcp-grafana
+
 .PHONY: lint lint-jsonschema lint-jsonschema-fix lint-openapi
 lint: lint-jsonschema lint-openapi ## Run format checks and lint the Go code.
 	gofmt -l . 
